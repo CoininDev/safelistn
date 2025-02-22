@@ -1,4 +1,5 @@
 use jack::*;
+use console::Term;
 
 fn main() {
     // the limit of our sound
@@ -50,13 +51,48 @@ fn main() {
 
 
     arrange_connections(&active_client.as_client());
-    // Mantendo o cliente ativo
-    std::thread::park();
 
-    // Deactivating the client
+    // Keep the client running until the user presses 'q'
+    println!("Press 'q' to exit");
+    let term = Term::stdout();
+    loop {
+        if let Ok('q') = term.read_char() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+
+    // Deactivate the client
+    disarrange_connections(&active_client.as_client());
     active_client.deactivate().unwrap();
 }
 
+fn disarrange_connections(client: &Client) {
+    // Getting ports connected to the client
+    let connectionsl = client.port_by_name("safelistn:inL").unwrap().get_connections();
+    let connectionsr = client.port_by_name("safelistn:inR").unwrap().get_connections();
+
+    // Redirect them back to system
+    connectionsl
+        .iter()
+        .for_each(|conn| {
+            let _ = client.disconnect_ports_by_name(conn, "safelistn:inL");
+            let _ = client.connect_ports_by_name(conn, "system:playback_1");
+        })
+    ;
+
+    connectionsr
+        .iter()
+        .for_each(|conn| {
+            let _ = client.disconnect_ports_by_name(conn, "safelistn:inR");
+            let _ = client.connect_ports_by_name(conn, "system:playback_2");
+        })
+    ;
+
+    //disconnect client to system
+    let _ = client.disconnect_ports_by_name("safelistn:outL", "system:playback_1");
+    let _ = client.disconnect_ports_by_name("safelistn:outR", "system:playback_2");
+}
 
 fn arrange_connections(client: &Client) {
     // Getting ports connected to main output
