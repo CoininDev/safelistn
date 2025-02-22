@@ -1,9 +1,48 @@
 use jack::*;
 use console::Term;
 
+struct Compressor {
+    threshold: f32,
+    ratio: f32,
+    attack_coeff: f32,
+    release_coeff: f32,
+    envelope: f32
+}
+
+impl Compressor {
+    fn new(threshold:f32, ratio:f32, attack_ms:f32, release_ms:f32, sample_rate:f32) -> Self {
+        let attack_coeff = (-1.0 / (attack_ms * 0.001 * sample_rate)).exp();
+        let release_coeff = (-1.0 / (release_ms * 0.001 * sample_rate)).exp();
+
+        Self {
+            threshold,
+            ratio,
+            attack_coeff,
+            release_coeff,
+            envelope: 0.0
+        }
+    }
+
+    fn update_envelope(&mut self, input_abs:f32) {
+        if input_abs > self.envelope {
+            self.envelope = self.attack_coeff * self.envelope + (1.0 - self.attack_coeff) * input_abs;
+        }
+        else {
+            self.envelope = self.release_coeff * self.envelope + (1.0 - self.release_coeff) * input_abs;
+        }
+    }
+
+    fn calculate_gain(&self) -> f32{
+        if self.envelope > self.threshold {
+            let excess = self.envelope - self.threshold;
+            let gain = self.threshold + excess / self.ratio;
+            gain / self.envelope
+        }
+        else { 0.0 }
+    }
+}
+
 fn main() {
-    // the limit of our sound
-    let threshold = 0.1;
 
     // initializing client
     let (client, _status) = Client::new("safelistn", ClientOptions::NO_START_SERVER).unwrap();
@@ -14,6 +53,16 @@ fn main() {
     let mut out_port_l = client.register_port("outL", AudioOut::default()).unwrap();
     let mut out_port_r = client.register_port("outR", AudioOut::default()).unwrap();
 
+    // Initializing compressor
+    let sample_rate = client.sample_rate() as f32;
+    let mut compressor = Compressor::new(
+        0.1,
+        4.0,
+        10.0,
+        100.0,
+        sample_rate
+    );
+
     // processing audio (audio compression)
     let process = jack::contrib::ClosureProcessHandler::new(
         move |_: &jack::Client, ps: &jack::ProcessScope| -> jack::Control {
@@ -22,24 +71,21 @@ fn main() {
             let out_pl = out_port_l.as_mut_slice(ps);
             let out_pr = out_port_r.as_mut_slice(ps);
 
-            for (i, (in_l, in_r)) in in_pl.iter().zip(in_pr.iter()).enumerate() {
-                let mut out_l = *in_l;
-                let mut out_r = *in_r;
+            for (((in_l, in_r), out_l), out_r ) in in_pl.iter()
+                .zip(in_pr.iter())
+                .zip(out_pl.iter_mut())
+                .zip(out_pr.iter_mut())
+            {
+                let in_l_val = *in_l as f32;
+                let in_r_val = *in_r as f32;
 
-                if out_l > threshold {
-                    out_l = threshold + (out_l - threshold) / 2.0;
-                } else if out_l < -threshold {
-                    out_l = -threshold + (out_l + threshold) / 2.0;
-                }
+                let max_input = in_l_val.abs().max(in_r_val.abs());
 
-                if out_r > threshold {
-                    out_r = threshold + (out_r - threshold) / 2.0;
-                } else if out_r < -threshold {
-                    out_r = -threshold + (out_r + threshold) / 2.0;
-                }
+                compressor.update_envelope(max_input);
+                let gain = compressor.calculate_gain();
 
-                out_pl[i] = out_l;
-                out_pr[i] = out_r;
+                *out_l = in_l_val * gain;
+                *out_r = in_r_val * gain;
             }
 
             jack::Control::Continue
