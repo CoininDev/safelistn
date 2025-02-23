@@ -6,11 +6,12 @@ struct Compressor {
     ratio: f32,
     attack_coeff: f32,
     release_coeff: f32,
-    envelope: f32
+    envelope: f32,
+    makeup_gain: f32
 }
 
 impl Compressor {
-    fn new(threshold:f32, ratio:f32, attack_ms:f32, release_ms:f32, sample_rate:f32) -> Self {
+    fn new(threshold:f32, ratio:f32, attack_ms:f32, release_ms:f32, sample_rate:f32, makeup_gain:f32) -> Self {
         let attack_coeff = (-1.0 / (attack_ms * 0.001 * sample_rate)).exp();
         let release_coeff = (-1.0 / (release_ms * 0.001 * sample_rate)).exp();
 
@@ -19,7 +20,8 @@ impl Compressor {
             ratio,
             attack_coeff,
             release_coeff,
-            envelope: 0.0
+            envelope: 0.0,
+            makeup_gain
         }
     }
 
@@ -33,12 +35,12 @@ impl Compressor {
     }
 
     fn calculate_gain(&self) -> f32{
+        let mut gain = 1.0;
         if self.envelope > self.threshold {
             let excess = self.envelope - self.threshold;
-            let gain = self.threshold + excess / self.ratio;
-            gain / self.envelope
+            gain = (self.threshold + excess / self.ratio) / self.envelope;
         }
-        else { 0.0 }
+        gain * self.makeup_gain
     }
 }
 
@@ -56,11 +58,12 @@ fn main() {
     // Initializing compressor
     let sample_rate = client.sample_rate() as f32;
     let mut compressor = Compressor::new(
-        0.1,
+        0.2,
         4.0,
-        10.0,
-        100.0,
-        sample_rate
+        5.0,
+        50.0,
+        sample_rate,
+        3.0
     );
 
     // processing audio (audio compression)
@@ -76,8 +79,8 @@ fn main() {
                 .zip(out_pl.iter_mut())
                 .zip(out_pr.iter_mut())
             {
-                let in_l_val = *in_l as f32;
-                let in_r_val = *in_r as f32;
+                let in_l_val = *in_l;
+                let in_r_val = *in_r;
 
                 let max_input = in_l_val.abs().max(in_r_val.abs());
 
@@ -127,6 +130,9 @@ fn disarrange_connections(client: &Client) {
         })
     ;
 
+    // I suspect that sometimes the code don't get enough time to do it correctly, so I think it should work.
+    std::thread::sleep(std::time::Duration::from_millis(100));
+
     connectionsr
         .iter()
         .for_each(|conn| {
@@ -134,6 +140,8 @@ fn disarrange_connections(client: &Client) {
             let _ = client.connect_ports_by_name(conn, "system:playback_2");
         })
     ;
+
+    std::thread::sleep(std::time::Duration::from_millis(100));
 
     //disconnect client to system
     let _ = client.disconnect_ports_by_name("safelistn:outL", "system:playback_1");
